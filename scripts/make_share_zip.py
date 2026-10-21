@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT_NAME = "mimic-iv-aki-preprocessing"
 OUT = Path("mimic_iv_aki_preprocessing.zip")
-INCLUDE = ["README.md", "LICENSE", "config.yaml", "requirements.txt", "requirements-notebook.txt", ".gitignore", "PREPROCESSING_REPORT.md"]
+INCLUDE = ["README.md", "README.ko.md", "LICENSE", "config.yaml", "requirements.txt", "requirements-notebook.txt", ".gitignore", "PREPROCESSING_REPORT.md"]
 INCLUDE_GLOBS = ["scripts/*.py", "scripts/*.sh", "docs/*.md", "notebooks/*.ipynb"]
 CACHE = "data/external/rxnav_cache.json"
 FORBIDDEN = {
