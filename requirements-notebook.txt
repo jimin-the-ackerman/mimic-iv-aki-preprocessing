@@ -1,0 +1,7 @@
+# Extra packages for notebooks/baseline_models.ipynb, on top of the pipeline packages.
+-r requirements.txt
+ipykernel==7.4.0
+jupyterlab==4.6.4
+matplotlib==3.11.2
+scikit-learn==1.9.1
+scipy==1.18.1

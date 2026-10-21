@@ -1,0 +1,162 @@
+# Parameters for the MIMIC-IV AKI prediction cohort. See docs/cohort_definition.md for the reasoning.
+# MIMIC-IV tables that the pipeline reads. Script 01 converts them. Script 09 uses their column names to mark the origin of columns.
+mimic_tables:
+  hosp: [patients, admissions, labevents, d_labitems, diagnoses_icd, d_icd_diagnoses, prescriptions]
+  icu: [icustays, chartevents, d_items, inputevents, outputevents, procedureevents]
+
+paths:
+  csv_root: data/mimiciv/3.1
+  parquet_root: data/mimiciv/3.1_parquet
+
+task:
+  time_zero_hours: 48          # prediction time, hours after ICU admission
+  lookback_hours: 48           # features come from [0, time_zero]
+  horizon_hours: 24            # X: label window is (time_zero, time_zero + horizon]
+  first_onset_only: true       # drop stays with AKI before time zero
+  drop_unobserved_negatives: true  # drop AKI-free stays that die/leave inside the horizon
+  drop_rrt_before_t0_non_esrd: true     # Decision 12: dialysis started in ICU before time zero, not chronic
+  drop_negatives_without_data: true     # Decision 13: no creatinine and <6 h urine data in the window
+
+cohort:
+  one_stay_per_admission: first
+  min_age: 18
+  min_icu_los_hours: 48
+  keep_esrd_chronic_dialysis: true   # kept, flagged via esrd_chronic_dialysis
+  esrd_icd10: [N186, Z992]
+  esrd_icd9: ["5856", V451, V4511]   # V4512 (noncompliance) is deliberately not included
+  esrd_chartevent_itemids: [225126]  # "Dialysis patient" (admission history)
+
+aki:
+  creatinine_rise_mg_dl: 0.3         # within 48 h
+  creatinine_rise_window_hours: 48
+  creatinine_ratio: 1.5              # versus baseline, within 7 days
+  baseline_window_days: 7            # lowest creatinine in the window, incl. pre-ICU labs
+  baseline_fallback: first_icu_creatinine
+  uo_threshold_ml_kg_h: 0.5
+  uo_consecutive_hours: 6
+  uo_missing_hours_as_zero: false
+  uo_max_interval_hours: 2                    # every charted interval in the 6 h window must be <= 2 h (Decision 11, option A)
+  uo_window_requires_documented_hours: true   # 6 h window valid only if charted intervals cover >= 6 h and < 12 h (as mimic-code kdigo_uo)
+  creatinine_itemid_for_label: [50912]        # blood-gas creatinine (52024) is a feature only
+  creatinine_plausible_mg_dl: [0.1, 30]
+  weight_plausible_kg: [20, 400]
+  min_creatinine_values_0_to_t0: 2
+  weight_source: admission_weight_then_first_recorded   # stays with no weight are excluded
+  save_criterion_flags: [aki_by_creat, aki_by_uo]
+
+features:
+  output_formats: [hourly, wide]     # wide is derived from hourly
+  imputation: none                   # keep missing; add masks and hours-since-last-measured
+  outliers: set_to_missing_with_flag # ranges in a doctor-reviewed table (TODO)
+  egfr: [mdrd, cockcroft_gault, ckd_epi_cr_2021]   # computed from creatinine, age, sex (weight for CG)
+  egfr_skipped: [schwartz, cystatin_c]  # Schwartz is pediatric; no cystatin C item exists in MIMIC-IV
+  egfr_lab_reported: dropped            # lab-reported eGFR (50920, 52026, 53161, 53180) is sparse and uses other formulas
+  drugs: from_prescriptions_first_48h   # curated list TODO, doctors to review
+
+splits:
+  seed: 42
+  by: subject_id
+  versions: [split_random, split_temporal, split_hybrid]
+  random_fractions: {train: 0.70, val: 0.15, test: 0.15}
+  default: split_random
+  temporal:                      # anchor_year_group -> split
+    train: ["2008 - 2010", "2011 - 2013", "2014 - 2016"]
+    val: ["2017 - 2019"]
+    test: ["2020 - 2022"]
+  hybrid_val_fraction: 0.15      # of patients in the non-test year groups; the latest group is test
+
+itemids:
+  labevents:
+    creatinine: [50912, 52024]
+    bun: [51006]
+    urine_creatinine: [51082]
+    sodium: [50983, 50824]
+    potassium: [50971, 50822]
+    chloride: [50902, 50806]
+    bicarbonate: [50882, 50803]
+    phosphate: [50970]
+    magnesium: [50960]
+    uric_acid: [51007]
+  chartevents:
+    heart_rate: [220045]
+    sbp: [220179, 220050]   # non-invasive, arterial
+    dbp: [220180, 220051]
+    mbp: [220181, 220052]
+    resp_rate: [220210]
+    temp_f: [223761]
+    temp_c: [223762]
+    weight_admission_kg: [226512]
+    weight_admission_lbs: [226531]
+    weight_daily_kg: [224639]
+    dialysis_blood_flow: [224144]
+    dialysate_rate: [224154]
+    dialysate_fluid: [225977, 230085]
+    ultrafiltrate_output: [226457]
+  outputevents:
+    urine: [226559, 226560, 226561, 226567, 226563, 226564, 226565, 226627, 226631]
+    urine_excluded: [226633, 227489]   # pre-admission; irrigant mixed with urine
+    drainage: [226588, 226589, 229413, 229414, 226606, 226607, 226608, 226609, 226599, 226600, 226601, 226602, 226597, 226598,
+               226613, 226614, 226610, 226592, 226590, 226591, 226593, 226595, 226612, 226603, 226604, 226605, 226619, 226620,
+               226617, 226618, 226623, 226624, 226616, 226621, 226622, 227701, 226628, 226625]   # chest tubes, JP, wound vac, CSF, pleural, ascites tap ...
+    stool: [226579, 226580, 226582, 226583]    # stool, fecal bag, ostomy, rectal tube
+    not_output: [226626, 226629, 227510, 227511, 227488]   # OR/PACU blood loss, tube-feed residual, irrigant in
+    # every other outputevents item (gastric tubes, emesis, ileoconduit, ureteral stents, cath lab ...) goes to other_output_ml
+  procedureevents:
+    dialysis: [225441, 225802, 225805]
+
+# Draft values for clinical review. Values outside the range are set to missing and counted in n_outlier_<var>.
+plausible_ranges:
+  hr: [20, 300]
+  sbp: [40, 300]
+  dbp: [10, 200]
+  mbp: [20, 250]
+  rr: [2, 80]
+  temp_c: [25, 45]
+  weight_daily: [20, 400]
+  creatinine: [0.1, 30]
+  creatinine_wb: [0.1, 30]
+  bun: [1, 300]
+  urine_creat: [1, 1500]
+  na: [100, 180]
+  k: [1.5, 9]
+  cl: [60, 140]
+  hco3: [3, 60]
+  phosphate: [0.3, 20]
+  mg: [0.3, 10]
+  uric_acid: [0.5, 30]
+  dial_blood_flow: [0, 600]
+  dialysate_rate: [0, 10000]
+  ultrafiltrate_ml: [0, 5000]
+  urine_ml: [0, 5000]
+  drain_ml: [0, 5000]
+  stool_ml: [0, 5000]
+  other_output_ml: [0, 5000]
+  intake_ml: [0, 10000]
+  urine_ml_kg_h: [0, 20]          # derived rate; outside the range -> missing
+
+# Drug features come from prescriptions mapped to ATC classes (scripts/06_build_drug_map.py).
+# Exposure = order started before time zero and not stopped before ICU admission.
+# Route handling: ATC codes come from the ingredient, not the route, so codes that do not fit the order's route are dropped
+# (skin/eye/ear codes D and S for systemic routes, local-route orders keep only D and S, intestinal anti-infectives A07 only
+# for oral routes).
+drugs:
+  atc_min_stay_fraction: 0.01    # a level-3 ATC flag (atc3_*) is made for every class ordered in >= 1% of cohort stays
+  kidney_relevant:               # DRAFT for clinical review. One flag each: atc_<code>_<key> (ATC prefix match) or drug_<key> (ingredient name).
+    aminoglycoside: {label: Aminoglycoside antibiotics, atc: [J01G], iv: true, im_too: true}
+    vancomycin: {label: Glycopeptide antibacterials (vancomycin), atc: [J01XA], iv: true}
+    # RxNorm gives only class-level ATC (J01CA also covers ampicillin), so this one matches the mapped ingredient name instead
+    pip_tazo: {label: Piperacillin (piperacillin-tazobactam), ingredients: [piperacillin], iv: true}
+    polymyxin: {label: Polymyxins (colistin), atc: [J01XB], iv: true}
+    amphotericin: {label: Amphotericin B, atc: [J02AA], iv: true}
+    nucleoside_antiviral: {label: Nucleoside antivirals (acyclovir, ganciclovir), atc: [J05AB], iv: true}
+    nsaid: {label: NSAIDs, atc: [M01A]}
+    loop_diuretic: {label: Loop diuretics, atc: [C03C]}
+    ace_arb: {label: ACE inhibitors and ARBs, atc: [C09]}
+    calcineurin: {label: Calcineurin inhibitors (tacrolimus, cyclosporine), atc: [L04AD]}
+  vasopressor_itemids: [221289, 221662, 221749, 221906, 222315, 229617, 229630, 229631, 229632, 229709, 229764]
+
+# CSV copies of the small outputs, for opening in Excel or VS Code (scripts/11_export_csv.py). Parquet stays the main format.
+csv_export:
+  files: [data/cohort/cohort_final, data/features/wide, data/features/splits, data/external/drug_map]   # path without extension
+  hourly_example_stays: 100        # data/features/hourly_example.csv: the hourly table for the first N stays by stay_id
+  max_csv_mb: 50                   # a file that would be larger than this is not written (warning instead)

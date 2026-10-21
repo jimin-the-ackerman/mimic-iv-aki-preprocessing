@@ -1,0 +1,13 @@
+# Environment and caches
+.venv/
+.claude/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+
+# MIMIC-IV data and everything derived from it stay local (PhysioNet data use agreement).
+# This includes data/external/rxnav_cache.json, which holds drug names and NDC codes from MIMIC-IV prescriptions.
+data/
+
+# Shareable archive made by scripts/make_share_zip.py
+*.zip
